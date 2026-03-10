@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doki Stack — Database ERD</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #08080d;
+    --surface: #111118;
+    --surface-2: #1a1a24;
+    --border: #252535;
+    --border-hover: #3a3a55;
+    --text: #e0e0ef;
+    --text-muted: #7878a0;
+    --ce: #4ec9f0;
+    --ce-dim: #162a38;
+    --ee: #d49ce0;
+    --ee-dim: #2e1638;
+    --pk: #ffd54f;
+    --fk: #ff8a65;
+    --type: #81c784;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #viewport {
+    width: 100%; height: 100%;
+    overflow: hidden; position: relative;
+    cursor: grab;
+  }
+  #viewport.dragging { cursor: grabbing; }
+
+  #world {
+    position: absolute;
+    transform-origin: 0 0;
+  }
+
+  svg#connectors {
+    position: absolute;
+    top: 0; left: 0;
+    width: 5000px; height: 3600px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .tbl {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    min-width: 250px;
+    z-index: 1;
+    box-shadow: 0 6px 30px rgba(0,0,0,0.5);
+    transition: box-shadow .2s, border-color .2s, transform .15s;
+  }
+  .tbl:hover {
+    box-shadow: 0 12px 50px rgba(0,0,0,0.7);
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+  .tbl.ce { border-top: 3px solid var(--ce); }
+  .tbl.ee { border-top: 3px solid var(--ee); }
+
+  .tbl-head {
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; font-weight: 700;
+    padding: 2px 7px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .ce .badge { background: var(--ce-dim); color: var(--ce); }
+  .ee .badge { background: var(--ee-dim); color: var(--ee); }
+
+  .tbl-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700; font-size: 13px;
+  }
+
+  .cols { padding: 5px 0; }
+
+  .col {
+    display: flex; align-items: center;
+    padding: 2.5px 14px; gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; line-height: 1.7;
+  }
+  .col:hover { background: var(--surface-2); }
+
+  .ki {
+    font-size: 8px; width: 20px; text-align: center;
+    font-weight: 700; border-radius: 3px;
+    padding: 1px 2px; flex-shrink: 0;
+  }
+  .ki.pk { background: #ffd54f18; color: var(--pk); }
+  .ki.fk { background: #ff8a6518; color: var(--fk); }
+  .ki.pkfk { background: #ff8a6518; color: var(--fk); font-size: 7px; }
+  .ki.plain { color: var(--text-muted); }
+
+  .cn { flex: 1; }
+  .ct { color: var(--type); font-size: 10px; }
+
+  .part {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; padding: 5px 14px;
+    color: var(--fk); border-top: 1px solid var(--border);
+    letter-spacing: .3px;
+  }
+
+  #hud {
+    position: fixed; top: 16px; left: 50%;
+    transform: translateX(-50%); z-index: 20;
+    text-align: center; pointer-events: none;
+  }
+  #hud h1 { font-size: 22px; font-weight: 700; letter-spacing: -.5px; }
+  #hud p { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  #legend {
+    position: fixed; top: 16px; left: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px;
+    z-index: 20; font-size: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  }
+  #legend h3 { font-size: 13px; margin-bottom: 8px; font-weight: 700; }
+  .lr { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .sw { width: 16px; height: 4px; border-radius: 2px; }
+
+  #controls {
+    position: fixed; bottom: 20px; right: 20px;
+    display: flex; gap: 8px; z-index: 20;
+  }
+  #controls button {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    width: 38px; height: 38px; font-size: 18px;
+    cursor: pointer; display: flex;
+    align-items: center; justify-content: center;
+    transition: background .15s;
+    box-shadow: 0 2px 10px rgba(0,0,0,.3);
+  }
+  #controls button:hover { background: var(--surface-2); }
+
+  #zoom-level {
+    position: fixed; bottom: 24px; right: 160px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--text-muted);
+    z-index: 20;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <h1>Doki Stack &mdash; Database ERD</h1>
+  <p>9 CE tables &bull; 17 EE tables &bull; scroll to zoom &bull; drag to pan</p>
+</div>
+
+<div id="legend">
+  <h3>Legend</h3>
+  <div class="lr"><span class="ki pk" style="font-size:9px;width:auto">PK</span> Primary Key</div>
+  <div class="lr"><span class="ki fk" style="font-size:9px;width:auto">FK</span> Foreign Key</div>
+  <div class="lr"><div class="sw" style="background:var(--ce)"></div> CE (public)</div>
+  <div class="lr"><div class="sw" style="background:var(--ee)"></div> EE (ee schema)</div>
+  <div class="lr"><div class="sw" style="background:var(--fk)"></div> Cross-schema FK</div>
+</div>
+
+<div id="controls">
+  <button onclick="zoom(1.25)" title="Zoom in">+</button>
+  <button onclick="zoom(0.8)" title="Zoom out">&minus;</button>
+  <button onclick="fit()" title="Fit all">&#9632;</button>
+  <button onclick="resetView()" title="Reset">&#8634;</button>
+</div>
+<div id="zoom-level"></div>
+
+<div id="viewport">
+  <div id="world">
+    <svg id="connectors"></svg>
+  </div>
+</div>
+
+<script>
+const T = [
+  // === CE Core Flow (left) ===
+  { id:'orgs', s:'ce', x:100, y:120, n:'orgs', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'name',t:'TEXT'},{n:'slug',t:'TEXT'},{n:'settings',t:'JSONB'},
+    {n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'users', s:'ce', x:460, y:60, n:'users', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'auth0_sub',t:'TEXT'},{n:'email',t:'TEXT'},{n:'display_name',t:'TEXT'},
+    {n:'role',t:'user_role'},{n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'tasks', s:'ce', x:460, y:380, n:'tasks', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'user_id',t:'UUID',k:'fk',r:'users'},{n:'title',t:'TEXT'},
+    {n:'description',t:'TEXT'},{n:'status',t:'task_status'},
+    {n:'thread_id',t:'UUID'},{n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'plans', s:'ce', x:820, y:200, n:'plans', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'task_id',t:'UUID',k:'fk',r:'tasks'},{n:'plan_type',t:'plan_type'},
+    {n:'resource_changes',t:'JSONB'},{n:'status',t:'plan_status'},
+    {n:'artifact_path',t:'TEXT'},{n:'expires_at',t:'TIMESTAMPTZ'},
+    {n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'approvals', s:'ce', x:1180, y:120, n:'approvals', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'plan_id',t:'UUID',k:'fk',r:'plans'},{n:'approver_id',t:'UUID',k:'fk',r:'users'},
+    {n:'status',t:'approval_status'},{n:'comment',t:'TEXT'},
+    {n:'decided_at',t:'TIMESTAMPTZ'},{n:'created_at',t:'TIMESTAMPTZ'}
+  ]},
+
+  // === CE Supporting (bottom-left) ===
+  { id:'audit_logs', s:'ce', x:100, y:550, n:'audit_logs', p:'RANGE on created_at', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'created_at',t:'TIMESTAMPTZ',k:'pk'},
+    {n:'org_id',t:'UUID'},{n:'user_id',t:'UUID'},
+    {n:'actor_type',t:'actor_type'},{n:'action',t:'TEXT'},
+    {n:'resource_type',t:'TEXT'},{n:'resource_id',t:'UUID'},{n:'details',t:'JSONB'}
+  ]},
+  { id:'scanner_contexts', s:'ce', x:100, y:880, n:'scanner_contexts', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'repo',t:'TEXT'},{n:'branch',t:'TEXT'},{n:'commit_sha',t:'TEXT'},
+    {n:'artifact_paths',t:'TEXT[]'},{n:'scanned_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'policy_rules', s:'ce', x:460, y:720, n:'policy_rules', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'name',t:'TEXT'},{n:'rule_type',t:'TEXT'},{n:'rule_config',t:'JSONB'},
+    {n:'severity',t:'severity_level'},{n:'enabled',t:'BOOLEAN'}
+  ]},
+  { id:'cost_limits', s:'ce', x:460, y:980, n:'cost_limits', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'resource_type',t:'TEXT'},{n:'limit_amount',t:'NUMERIC(12,2)'},
+    {n:'remaining_budget',t:'NUMERIC(12,2)'},{n:'period',t:'budget_period'}
+  ]},
+
+  // === EE Phase 3 (center) ===
+  { id:'agent_memories', s:'ee', x:820, y:550, n:'agent_memories', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'memory_type',t:'ee.memory_type'},{n:'key',t:'TEXT'},{n:'value',t:'JSONB'},
+    {n:'source_task_id',t:'UUID',k:'fk',r:'tasks'},{n:'relevance_score',t:'NUMERIC(5,4)'},
+    {n:'decay_factor',t:'NUMERIC(5,4)'},{n:'access_count',t:'INTEGER'}
+  ]},
+  { id:'discovery_scans', s:'ee', x:820, y:880, n:'discovery_scans', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'provider',t:'ee.cloud_provider'},{n:'regions',t:'TEXT[]'},
+    {n:'status',t:'ee.scan_status'},{n:'resource_count',t:'INTEGER'},
+    {n:'result_path',t:'TEXT'}
+  ]},
+
+  // === EE Phase 4 - Multi-tenancy (right-top) ===
+  { id:'organizations', s:'ee', x:1560, y:60, n:'organizations', c:[
+    {n:'org_id',t:'UUID',k:'pkfk',r:'orgs'},{n:'billing_email',t:'TEXT'},
+    {n:'billing_plan',t:'TEXT'},{n:'sso_provider',t:'TEXT'},
+    {n:'feature_flags',t:'JSONB'},{n:'max_users',t:'INTEGER'}
+  ]},
+  { id:'teams', s:'ee', x:1560, y:340, n:'teams', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'name',t:'TEXT'},{n:'description',t:'TEXT'}
+  ]},
+  { id:'org_members', s:'ee', x:1560, y:560, n:'org_members', c:[
+    {n:'org_id',t:'UUID',k:'pkfk',r:'orgs'},{n:'user_id',t:'UUID',k:'pkfk',r:'users'},
+    {n:'team_id',t:'UUID',k:'fk',r:'teams'},{n:'role',t:'TEXT'},
+    {n:'joined_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'org_quotas', s:'ee', x:1560, y:800, n:'org_quotas', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'resource_type',t:'TEXT'},{n:'limit_value',t:'INTEGER'},
+    {n:'current_usage',t:'INTEGER'}
+  ]},
+
+  // === EE Phase 4 - MCP & Notifications (far right top) ===
+  { id:'mcp_registry', s:'ee', x:1940, y:60, n:'mcp_registry', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'name',t:'TEXT'},{n:'endpoint_url',t:'TEXT'},
+    {n:'auth_type',t:'ee.mcp_auth_type'},{n:'tool_manifest',t:'JSONB'},
+    {n:'health_status',t:'ee.mcp_health_status'}
+  ]},
+  { id:'notification_preferences', s:'ee', x:1940, y:340, n:'notification_prefs', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'user_id',t:'UUID',k:'fk',r:'users'},{n:'event_types',t:'TEXT[]'},
+    {n:'channels',t:'JSONB'},{n:'enabled',t:'BOOLEAN'}
+  ]},
+  { id:'channel_configs', s:'ee', x:1940, y:580, n:'channel_configs', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'channel_type',t:'ee.channel_type'},{n:'name',t:'TEXT'},
+    {n:'config',t:'JSONB'},{n:'enabled',t:'BOOLEAN'}
+  ]},
+
+  // === EE Phase 4 - Governance (far right middle) ===
+  { id:'governance_policies', s:'ee', x:2340, y:60, n:'governance_policies', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'policy_type',t:'TEXT'},{n:'name',t:'TEXT'},
+    {n:'config',t:'JSONB'},{n:'enabled',t:'BOOLEAN'}
+  ]},
+  { id:'approval_rules', s:'ee', x:2340, y:320, n:'approval_rules', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'name',t:'TEXT'},{n:'risk_level',t:'TEXT'},
+    {n:'required_approvers',t:'INTEGER'},{n:'conditions',t:'JSONB'}
+  ]},
+  { id:'attestations', s:'ee', x:1180, y:430, n:'attestations', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'plan_id',t:'UUID',k:'fk',r:'plans'},{n:'attester_id',t:'UUID',k:'fk',r:'users'},
+    {n:'attestation_type',t:'TEXT'},{n:'evidence',t:'JSONB'}
+  ]},
+
+  // === EE Phase 4 - Reporting & Licensing (far right bottom) ===
+  { id:'dashboard_aggregates', s:'ee', x:2340, y:560, n:'dashboard_aggregates', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'metric_name',t:'TEXT'},{n:'metric_value',t:'NUMERIC'},
+    {n:'dimensions',t:'JSONB'},{n:'period_start',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'reports', s:'ee', x:2340, y:810, n:'reports', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'name',t:'TEXT'},{n:'report_type',t:'TEXT'},
+    {n:'format',t:'TEXT'},{n:'artifact_path',t:'TEXT'}
+  ]},
+  { id:'report_schedules', s:'ee', x:2740, y:810, n:'report_schedules', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'report_id',t:'UUID',k:'fk',r:'reports'},{n:'cron_expression',t:'TEXT'},
+    {n:'enabled',t:'BOOLEAN'},{n:'next_run_at',t:'TIMESTAMPTZ'}
+  ]},
+  { id:'licenses', s:'ee', x:2740, y:60, n:'licenses', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'org_id',t:'UUID',k:'fk',r:'orgs'},
+    {n:'license_key',t:'TEXT'},{n:'license_type',t:'TEXT'},
+    {n:'max_users',t:'INTEGER'},{n:'status',t:'TEXT'}
+  ]},
+  { id:'license_usage', s:'ee', x:2740, y:340, n:'license_usage', c:[
+    {n:'id',t:'UUID',k:'pk'},{n:'license_id',t:'UUID',k:'fk',r:'licenses'},
+    {n:'org_id',t:'UUID',k:'fk',r:'orgs'},{n:'active_users',t:'INTEGER'},
+    {n:'features_used',t:'JSONB'},{n:'recorded_at',t:'TIMESTAMPTZ'}
+  ]},
+];
+
+const world = document.getElementById('world');
+const svg = document.getElementById('connectors');
+const vp = document.getElementById('viewport');
+const zoomLabel = document.getElementById('zoom-level');
+
+let sc = 0.48, px = 40, py = 50;
+let drag = false, sx, sy;
+
+function buildCards() {
+  T.forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'tbl ' + t.s;
+    d.id = 'T_' + t.id;
+    d.style.left = t.x + 'px';
+    d.style.top = t.y + 'px';
+    let h = `<div class="tbl-head"><span class="badge">${t.s==='ce'?'public':'ee'}</span><span class="tbl-name">${t.n}</span></div><div class="cols">`;
+    t.c.forEach(c => {
+      let ki;
+      if (c.k==='pkfk') ki='<span class="ki pkfk">PK/FK</span>';
+      else if (c.k==='pk') ki='<span class="ki pk">PK</span>';
+      else if (c.k==='fk') ki='<span class="ki fk">FK</span>';
+      else ki='<span class="ki plain">&bull;</span>';
+      h += `<div class="col">${ki}<span class="cn">${c.n}</span><span class="ct">${c.t}</span></div>`;
+    });
+    h += '</div>';
+    if (t.p) h += `<div class="part">PARTITIONED: ${t.p}</div>`;
+    d.innerHTML = h;
+    world.appendChild(d);
+  });
+}
+
+function drawEdges() {
+  const paths = [];
+  T.forEach(t => {
+    const fe = document.getElementById('T_'+t.id);
+    if (!fe) return;
+    t.c.forEach(c => {
+      if (!c.r) return;
+      const tt = T.find(x=>x.id===c.r);
+      if (!tt) return;
+      const te = document.getElementById('T_'+tt.id);
+      if (!te) return;
+
+      const fw = fe.offsetWidth, fh = fe.offsetHeight;
+      const tw = te.offsetWidth, th = te.offsetHeight;
+      const fcx = t.x+fw/2, fcy = t.y+fh/2;
+      const tcx = tt.x+tw/2, tcy = tt.y+th/2;
+
+      let x1,y1,x2,y2;
+      const dx = tcx-fcx, dy = tcy-fcy;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        x1 = dx>0 ? t.x+fw : t.x;
+        x2 = dx>0 ? tt.x : tt.x+tw;
+        y1 = fcy; y2 = tcy;
+      } else {
+        y1 = dy>0 ? t.y+fh : t.y;
+        y2 = dy>0 ? tt.y : tt.y+th;
+        x1 = fcx; x2 = tcx;
+      }
+
+      const cross = t.s !== tt.s;
+      const col = cross ? '#ff8a65' : (t.s==='ee' ? '#d49ce0' : '#4ec9f0');
+      const op = cross ? '0.3' : '0.25';
+      const mx = (x1+x2)/2;
+
+      paths.push(`<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="1.5" stroke-opacity="${op}"/>`);
+      paths.push(`<circle cx="${x2}" cy="${y2}" r="3.5" fill="${col}" fill-opacity="0.45"/>`);
+    });
+  });
+  svg.innerHTML = paths.join('');
+}
+
+function applyTransform() {
+  world.style.transform = `translate(${px}px,${py}px) scale(${sc})`;
+  zoomLabel.textContent = Math.round(sc*100) + '%';
+}
+
+function zoom(f) {
+  const r = vp.getBoundingClientRect();
+  const cx = r.width/2, cy = r.height/2;
+  const ns = Math.max(.12, Math.min(2.5, sc*f));
+  px = cx - (cx-px)*(ns/sc);
+  py = cy - (cy-py)*(ns/sc);
+  sc = ns;
+  applyTransform();
+}
+
+function resetView() { sc=.48; px=40; py=50; applyTransform(); }
+
+function fit() {
+  const r = vp.getBoundingClientRect();
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  T.forEach(t => {
+    const e = document.getElementById('T_'+t.id);
+    if(!e) return;
+    minX = Math.min(minX, t.x);
+    minY = Math.min(minY, t.y);
+    maxX = Math.max(maxX, t.x + e.offsetWidth);
+    maxY = Math.max(maxY, t.y + e.offsetHeight);
+  });
+  const w = maxX-minX+100, h = maxY-minY+100;
+  sc = Math.min(r.width/w, r.height/h, 1.2);
+  px = (r.width - w*sc)/2 - minX*sc + 50*sc;
+  py = (r.height - h*sc)/2 - minY*sc + 50*sc;
+  applyTransform();
+}
+
+vp.addEventListener('wheel', e => {
+  e.preventDefault();
+  const f = e.deltaY>0 ? .92 : 1.09;
+  const r = vp.getBoundingClientRect();
+  const mx = e.clientX-r.left, my = e.clientY-r.top;
+  const ns = Math.max(.12, Math.min(2.5, sc*f));
+  px = mx-(mx-px)*(ns/sc);
+  py = my-(my-py)*(ns/sc);
+  sc = ns;
+  applyTransform();
+}, {passive:false});
+
+vp.addEventListener('mousedown', e => {
+  drag=true; sx=e.clientX-px; sy=e.clientY-py;
+  vp.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if(!drag) return;
+  px=e.clientX-sx; py=e.clientY-sy;
+  applyTransform();
+});
+window.addEventListener('mouseup', ()=>{ drag=false; vp.classList.remove('dragging'); });
+
+buildCards();
+applyTransform();
+requestAnimationFrame(drawEdges);
+</script>
+</body>
+</html>
