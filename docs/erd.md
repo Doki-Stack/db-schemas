@@ -79,7 +79,7 @@ erDiagram
         TEXT repo
         TEXT branch
         TEXT commit_sha
-        TEXT_ARRAY artifact_paths
+        TextArray artifact_paths
         TIMESTAMPTZ scanned_at
         TIMESTAMPTZ created_at
     }
@@ -146,8 +146,8 @@ erDiagram
         UUID id PK
         UUID org_id FK
         cloud_provider provider
-        TEXT_ARRAY regions
-        TEXT_ARRAY resource_types
+        TextArray regions
+        TextArray resource_types
         scan_status status
         TEXT error_message
         TEXT result_path
@@ -169,7 +169,7 @@ erDiagram
     }
 
     ee_organizations {
-        UUID org_id PK_FK
+        UUID org_id PK
         TEXT billing_email
         TEXT billing_plan
         TEXT sso_provider
@@ -191,8 +191,8 @@ erDiagram
     }
 
     ee_org_members {
-        UUID org_id PK_FK
-        UUID user_id PK_FK
+        UUID org_id PK
+        UUID user_id PK
         UUID team_id FK
         TEXT role
         TIMESTAMPTZ joined_at
@@ -212,7 +212,7 @@ erDiagram
         UUID id PK
         UUID org_id FK
         UUID user_id FK
-        TEXT_ARRAY event_types
+        TextArray event_types
         JSONB channels
         BOOLEAN enabled
         TIMESTAMPTZ created_at
