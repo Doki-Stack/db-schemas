@@ -154,27 +154,34 @@ ON CONFLICT (id) DO NOTHING;
 
 ### Audit Logs
 
+`audit_logs` is partitioned with a composite PK `(id, created_at)`. Standard `ON CONFLICT (id)` won't work because the PK includes the partition key. To ensure idempotency, use a `WHERE NOT EXISTS` guard and pin `created_at` to a fixed timestamp so re-runs produce the same row identity.
+
 ```sql
-INSERT INTO audit_logs (id, org_id, user_id, actor_type, action, resource_type, resource_id, details) VALUES
+INSERT INTO audit_logs (id, org_id, user_id, actor_type, action, resource_type, resource_id, details, created_at)
+SELECT * FROM (VALUES
   ('a5000000-0000-0000-0000-000000000001'::uuid,
    'a0000000-0000-0000-0000-000000000001'::uuid,
    'a1000000-0000-0000-0000-000000000004'::uuid,
-   'user', 'task.created', 'task',
+   'user'::actor_type, 'task.created', 'task',
    'a2000000-0000-0000-0000-000000000001'::uuid,
-   '{"title": "Deploy staging Redis cluster"}'::jsonb),
+   '{"title": "Deploy staging Redis cluster"}'::jsonb,
+   '2026-03-01T10:00:00Z'::timestamptz),
   ('a5000000-0000-0000-0000-000000000002'::uuid,
    'a0000000-0000-0000-0000-000000000001'::uuid,
-   NULL,
-   'agent', 'plan.generated', 'plan',
+   NULL::uuid,
+   'agent'::actor_type, 'plan.generated', 'plan',
    'a3000000-0000-0000-0000-000000000001'::uuid,
-   '{"plan_type": "terraform", "resource_count": 1}'::jsonb),
+   '{"plan_type": "terraform", "resource_count": 1}'::jsonb,
+   '2026-03-01T10:05:00Z'::timestamptz),
   ('a5000000-0000-0000-0000-000000000003'::uuid,
    'a0000000-0000-0000-0000-000000000001'::uuid,
    'a1000000-0000-0000-0000-000000000003'::uuid,
-   'user', 'approval.approved', 'approval',
+   'user'::actor_type, 'approval.approved', 'approval',
    'a4000000-0000-0000-0000-000000000001'::uuid,
-   '{"comment": "Reviewed resource changes. LGTM."}'::jsonb)
-ON CONFLICT DO NOTHING;
+   '{"comment": "Reviewed resource changes. LGTM."}'::jsonb,
+   '2026-03-01T10:10:00Z'::timestamptz)
+) AS v(id, org_id, user_id, actor_type, action, resource_type, resource_id, details, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM audit_logs WHERE audit_logs.id = v.id AND audit_logs.created_at = v.created_at);
 ```
 
 ### Scanner Contexts
@@ -385,7 +392,8 @@ spec:
       containers:
         - name: seed
           image: postgres:16
-          command: ["psql", "$(DATABASE_URL)", "-f", "/seed/dev_seed.sql"]
+          command: ["/bin/sh", "-c"]
+          args: ["psql \"$DATABASE_URL\" -f /seed/dev_seed.sql"]
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -401,6 +409,8 @@ spec:
             name: db-seed-data
       restartPolicy: Never
 ```
+
+Shell variable expansion (`$DATABASE_URL`) does not work in Kubernetes `command` arrays directly. The command must go through a shell (`/bin/sh -c`) for env var substitution.
 
 ## UUID Convention
 

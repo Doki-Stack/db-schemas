@@ -83,6 +83,19 @@ DROP TABLE IF EXISTS example;
 
 This numbering scheme leaves room for CE patch migrations (e.g., `014_add_column_to_tasks.sql`) without conflicting with EE migrations.
 
+**dbmate default behavior:** `dbmate new` generates files with timestamp prefixes (e.g., `20260310143000_description.sql`), not sequential numbers. To use our `NNN_` convention, create migration files manually or rename after generation:
+
+```bash
+# Option A: create files manually
+touch migrations/014_add_status_to_tasks.sql
+
+# Option B: generate and rename
+dbmate new add_status_to_tasks
+mv migrations/20260310*_add_status_to_tasks.sql migrations/014_add_status_to_tasks.sql
+```
+
+dbmate sorts migration files lexicographically, so our zero-padded `NNN_` convention maintains correct ordering.
+
 ## Migration Ordering and Dependencies
 
 ### CE Migrations (Phase 0)
@@ -351,10 +364,9 @@ dbmate status
 
 **Not managed by db-schemas.** The `langgraph-checkpoint-postgres` library creates and manages its own schema (`langgraph`) with tables for thread state, checkpoints, and metadata. The agent-orchestrator service handles this at startup.
 
-The only requirement from db-schemas is that the `langgraph` schema exists:
+The only requirement from db-schemas is that the `langgraph` schema exists. This is handled in migration 001 (`001_create_extensions.sql`):
 
 ```sql
--- Part of migration 001 or a separate setup script
 CREATE SCHEMA IF NOT EXISTS langgraph;
 GRANT ALL ON SCHEMA langgraph TO app_service;
 ```

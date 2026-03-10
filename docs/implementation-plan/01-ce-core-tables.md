@@ -12,9 +12,14 @@ All CE tables live in the `public` schema of the `ai_automation` database. Every
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE SCHEMA IF NOT EXISTS langgraph;
+GRANT ALL ON SCHEMA langgraph TO app_service;
 ```
 
 `gen_random_uuid()` is built into PostgreSQL 13+ and does not require an extension. `pgcrypto` is included for `crypt()` and `gen_random_bytes()` if needed by future migrations.
+
+The `langgraph` schema is created here so `langgraph-checkpoint-postgres` can manage its own tables at agent-orchestrator startup. db-schemas does not manage tables within this schema.
 
 ---
 
@@ -97,14 +102,15 @@ CREATE TABLE orgs (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_orgs_slug ON orgs (slug);
 ```
+
+The `UNIQUE` constraint on `slug` implicitly creates a unique index, so no separate index is needed.
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | `id` | UUID | PK, DEFAULT gen_random_uuid() | |
 | `name` | TEXT | NOT NULL | Display name |
-| `slug` | TEXT | NOT NULL, UNIQUE | URL-safe identifier |
+| `slug` | TEXT | NOT NULL, UNIQUE | URL-safe identifier (implicit unique index) |
 | `settings` | JSONB | NOT NULL, DEFAULT '{}' | Org-level configuration |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | |
@@ -130,7 +136,6 @@ CREATE TABLE users (
 );
 
 CREATE INDEX idx_users_org_id ON users (org_id);
-CREATE INDEX idx_users_email ON users (email);
 CREATE UNIQUE INDEX idx_users_org_id_email ON users (org_id, email);
 ```
 
@@ -303,6 +308,8 @@ CREATE TABLE audit_logs_y2026m11 PARTITION OF audit_logs
 CREATE TABLE audit_logs_y2026m12 PARTITION OF audit_logs
   FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
 
+CREATE TABLE audit_logs_default PARTITION OF audit_logs DEFAULT;
+
 CREATE INDEX idx_audit_logs_org_id_created_at ON audit_logs (org_id, created_at DESC);
 CREATE INDEX idx_audit_logs_resource ON audit_logs (resource_type, resource_id);
 CREATE INDEX idx_audit_logs_actor ON audit_logs (actor_type, user_id);
@@ -322,7 +329,7 @@ CREATE INDEX idx_audit_logs_gin_details ON audit_logs USING GIN (details);
 | `ip_address` | INET | Nullable | Client IP when available |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | Partition key |
 
-**Partitioning:** Range partitioned by month on `created_at`. A cron job or pg_partman creates future partitions. Partitions older than 12 months are detached and archived to MinIO.
+**Partitioning:** Range partitioned by month on `created_at`. A DEFAULT partition catches rows that don't match any range, preventing INSERT failures when future partitions haven't been created yet. A cron job or pg_partman creates future monthly partitions and detaches/archives partitions older than 12 months to MinIO. When a new month's partition is created, any rows that landed in DEFAULT for that range must be moved (`INSERT INTO ... SELECT`, then `DELETE FROM audit_logs_default`).
 
 **No foreign keys:** `org_id` and `user_id` are not foreign keys intentionally — audit logs must be retained even if the referenced org or user is deleted.
 
@@ -442,9 +449,9 @@ CREATE UNIQUE INDEX idx_cost_limits_org_resource ON cost_limits (org_id, resourc
 
 ---
 
-## Updated-At Trigger
+## Updated-At Trigger (Created in Migration 003)
 
-All tables with `updated_at` columns use a shared trigger function to auto-update the timestamp.
+The `update_updated_at()` function is created in migration 003 (alongside the `orgs` table) because it is the first migration that needs it. All subsequent tables reuse the same function.
 
 ```sql
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -454,18 +461,20 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
--- Applied to each table:
-CREATE TRIGGER trg_orgs_updated_at
-  BEFORE UPDATE ON orgs
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
-CREATE TRIGGER trg_users_updated_at
-  BEFORE UPDATE ON users
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
--- ... repeated for tasks, plans, policy_rules, cost_limits
 ```
+
+Each table with an `updated_at` column gets a trigger in its own migration:
+
+| Migration | Table | Trigger Name |
+|-----------|-------|-------------|
+| 003 | `orgs` | `trg_orgs_updated_at` |
+| 004 | `users` | `trg_users_updated_at` |
+| 005 | `tasks` | `trg_tasks_updated_at` |
+| 006 | `plans` | `trg_plans_updated_at` |
+| 010 | `policy_rules` | `trg_policy_rules_updated_at` |
+| 011 | `cost_limits` | `trg_cost_limits_updated_at` |
+
+Tables without `updated_at` (`approvals`, `audit_logs`, `scanner_contexts`) do not get this trigger.
 
 ---
 

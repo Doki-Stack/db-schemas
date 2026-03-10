@@ -90,58 +90,71 @@ CREATE POLICY audit_logs_select ON audit_logs
 
 ## Connection Setup
 
-Every service must set `app.current_org_id` on its database connection before executing any query. This is done per-connection (or per-transaction for connection poolers in transaction mode).
+Every service must set `app.current_org_id` within a transaction using `SET LOCAL` before executing any query. `SET LOCAL` scopes the setting to the current transaction and is automatically reverted on `COMMIT` or `ROLLBACK`, which is critical for connection pooler safety.
+
+**Why `SET LOCAL`, not `SET`:** A plain `SET` persists on the server-side connection for the entire session. If a connection pooler (PgBouncer, pgx pool, sqlx pool) returns that connection to the pool, the next tenant's transaction inherits the previous tenant's `org_id` — a cross-tenant data leak. `SET LOCAL` eliminates this by auto-reverting when the transaction ends.
 
 ### Go (pgx)
 
 ```go
-func withOrgID(ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) (*pgxpool.Conn, error) {
-    conn, err := pool.Acquire(ctx)
+func RunWithOrgID(ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, fn func(tx pgx.Tx) error) error {
+    tx, err := pool.Begin(ctx)
     if err != nil {
-        return nil, err
+        return err
     }
-    _, err = conn.Exec(ctx, "SET app.current_org_id = $1", orgID.String())
-    if err != nil {
-        conn.Release()
-        return nil, err
+    defer tx.Rollback(ctx)
+
+    if _, err := tx.Exec(ctx, "SET LOCAL app.current_org_id = $1", orgID.String()); err != nil {
+        return err
     }
-    return conn, nil
+    if err := fn(tx); err != nil {
+        return err
+    }
+    return tx.Commit(ctx)
 }
 ```
 
 ### Rust (sqlx)
 
 ```rust
-async fn with_org_id(pool: &PgPool, org_id: Uuid) -> Result<PgConnection> {
-    let mut conn = pool.acquire().await?;
-    sqlx::query("SET app.current_org_id = $1")
+async fn run_with_org_id<F, R>(pool: &PgPool, org_id: Uuid, f: F) -> Result<R>
+where
+    F: for<'c> FnOnce(&'c mut PgConnection) -> BoxFuture<'c, Result<R>>,
+{
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL app.current_org_id = $1")
         .bind(org_id.to_string())
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await?;
-    Ok(conn)
+    let result = f(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 ```
 
 ### Python (psycopg)
 
 ```python
-async def with_org_id(pool: AsyncConnectionPool, org_id: str) -> AsyncConnection:
-    conn = await pool.getconn()
-    await conn.execute("SET app.current_org_id = %s", (org_id,))
-    return conn
+async def run_with_org_id(pool: AsyncConnectionPool, org_id: str, fn):
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL app.current_org_id = %s", (org_id,))
+            return await fn(conn)
 ```
 
 ## Connection Pooling Considerations
 
 ### PgBouncer (Transaction Mode)
 
-When using PgBouncer in transaction mode, `SET` commands are reset when the connection is returned to the pool. This is the desired behavior — each transaction gets a fresh connection with no residual `org_id`.
+PgBouncer in transaction mode multiplexes server connections across clients between transactions. A plain `SET` persists on the server-side connection and **is NOT reset** when PgBouncer reassigns it — PgBouncer does not issue `DISCARD ALL` or `RESET ALL` between transactions. This means a plain `SET app.current_org_id` would leak to the next tenant's transaction.
 
-If PgBouncer is used in session mode, connections persist settings between transactions. This is **not recommended** for multi-tenant workloads.
+`SET LOCAL` solves this: the setting is scoped to the current transaction and automatically reverted on `COMMIT`/`ROLLBACK`, regardless of what the pooler does.
+
+PgBouncer session mode is **not recommended** for multi-tenant workloads.
 
 ### In-Application Pooling
 
-Go (pgx) and Rust (sqlx) use in-application connection pools. The `SET` must be issued after acquiring the connection and before any queries. The setting persists for the lifetime of the connection checkout.
+Go (pgx) and Rust (sqlx) use in-application connection pools. The same risk applies: when a connection is returned to the pool, a plain `SET` persists. Always use `SET LOCAL` within an explicit transaction block.
 
 ## Full Migration 012: Enable RLS
 
@@ -262,8 +275,9 @@ A validation script (`scripts/validate-rls.sh`) verifies that RLS works as expec
 ### Edge Cases to Validate
 
 - **Missing `app.current_org_id`:** queries should return zero rows (not error), because `current_setting(..., true)` returns NULL on missing setting, and `org_id = NULL` is always false.
-- **Invalid UUID format:** should return zero rows (cast fails to NULL with `true` parameter).
+- **Invalid UUID format:** the `::uuid` cast will raise an error if `app.current_org_id` is set to a non-UUID string. The `true` parameter on `current_setting` only suppresses errors for *missing* GUCs — it does not suppress cast failures. Services must validate UUID format in middleware before reaching the database.
 - **Partitioned table (audit_logs):** RLS must apply across all partitions.
+- **`SET LOCAL` scope:** if a service runs a query outside of an explicit transaction block, `SET LOCAL` has no effect (auto-commit transactions commit immediately). All RLS-scoped queries must be inside explicit `BEGIN`/`COMMIT` blocks.
 
 ## org_id Propagation — Full Path
 
@@ -282,7 +296,7 @@ A validation script (`scripts/validate-rls.sh`) verifies that RLS works as expec
 1. **Auth0:** User authenticates. JWT contains `org_id` in custom claims.
 2. **Kong:** Plugin extracts `org_id` from JWT, injects `X-Org-Id` header into upstream request.
 3. **Service middleware:** Extracts `X-Org-Id` header. Rejects request with 400 if missing. Validates UUID format.
-4. **Database connection:** Service calls `SET app.current_org_id = '{org_id}'` before any query.
+4. **Database connection:** Service opens a transaction and calls `SET LOCAL app.current_org_id = '{org_id}'` before any query.
 5. **RLS policy:** PostgreSQL filters all reads/writes to the current org.
 
 ## Multi-Tenancy Beyond PostgreSQL
