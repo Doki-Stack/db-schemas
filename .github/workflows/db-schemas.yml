@@ -1,0 +1,103 @@
+name: db-schemas CI
+on:
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'seed/**'
+      - 'scripts/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app_admin
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: ai_automation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app_admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "postgres://app_admin:test_password@localhost:5432/ai_automation?sslmode=disable"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dbmate
+        run: |
+          curl -fsSL -o /usr/local/bin/dbmate \
+            https://github.com/amacneil/dbmate/releases/latest/download/dbmate-linux-amd64
+          chmod +x /usr/local/bin/dbmate
+
+      - name: Create app_service role
+        run: |
+          psql "$DATABASE_URL" -c "
+            CREATE ROLE app_service LOGIN PASSWORD 'service_password';
+            GRANT CONNECT ON DATABASE ai_automation TO app_service;
+          "
+
+      - name: Lint SQL files
+        run: |
+          echo "Checking migration file naming convention..."
+          for f in migrations/*.sql; do
+            basename=$(basename "$f")
+            if ! echo "$basename" | grep -qE '^[0-9]{3}_[a-z][a-z0-9_]+\.sql$'; then
+              echo "ERROR: Invalid migration filename: $basename"
+              echo "Expected format: NNN_description.sql"
+              exit 1
+            fi
+          done
+          echo "All migration filenames valid."
+
+          echo "Checking for migrate:up and migrate:down markers..."
+          for f in migrations/*.sql; do
+            if ! grep -q '-- migrate:up' "$f"; then
+              echo "ERROR: Missing '-- migrate:up' in $f"
+              exit 1
+            fi
+            if ! grep -q '-- migrate:down' "$f"; then
+              echo "ERROR: Missing '-- migrate:down' in $f"
+              exit 1
+            fi
+          done
+          echo "All migrations have up and down markers."
+
+      - name: Run all migrations up
+        run: dbmate up
+
+      - name: Rollback and re-apply cycle
+        run: |
+          MIGRATION_COUNT=$(dbmate status 2>&1 | grep -c "^\[")
+          echo "Rolling back $MIGRATION_COUNT migrations..."
+          for i in $(seq 1 $MIGRATION_COUNT); do
+            dbmate rollback
+          done
+          echo "Re-applying all migrations..."
+          dbmate up
+
+      - name: RLS validation
+        run: |
+          chmod +x scripts/validate-rls.sh
+          scripts/validate-rls.sh
+
+      - name: Seed validation
+        run: |
+          psql "$DATABASE_URL" -f seed/dev_seed.sql
+          echo "CE seed applied successfully."
+
+          if dbmate status 2>&1 | grep -q "100_"; then
+            psql "$DATABASE_URL" -f seed/ee_seed.sql
+            echo "EE seed applied successfully."
+          fi
+
+      - name: Schema dump
+        run: |
+          dbmate dump
+          echo "Schema dump generated successfully."

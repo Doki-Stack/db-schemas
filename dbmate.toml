@@ -1,0 +1,4 @@
+[dbmate]
+migrations-dir = "./migrations"
+schema-file = "./schema.sql"
+no-dump-schema = false
